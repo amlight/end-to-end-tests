@@ -316,46 +316,62 @@ class TestE2EMefEline:
     """Error, start_date remains with the same value,
     despite the Patch action"""
     @pytest.mark.xfail
-    def test_patch_start_date_in_scheduled_circuit(self, disabled_circuit_id):
-
-        # Schedule by date to next minute
-        ts = datetime.now() + timedelta(seconds=60)
-        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    def test_patch_start_date(self):
+        api_url = KYTOS_API + '/mef_eline/v2/evc/'
+        start_delay = 20
+        ts1 = datetime.now() + timedelta(seconds=start_delay)
 
         payload = {
-            "circuit_id": disabled_circuit_id,
-            "schedule": {
-                "date": schedule_time
-            }
+            "name": "my evc1",
+            "enabled": True,
+            "uni_a": {
+                "interface_id": "00:00:00:00:00:00:00:01:1",
+            },
+            "uni_z": {
+                "interface_id": "00:00:00:00:00:00:00:01:2",
+            },
+            # ToDo this attribute should be start_date
+            "request_time": ts1.strftime(TIME_FMT)
         }
 
-        # create circuit schedule
-        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/'
-        requests.post(api_url, json=payload)
-
-        # It verifies circuit schedule data
-        response = requests.get(api_url)
+        response = requests.post(api_url, json=payload)
         data = response.json()
-        schedule_id = data[0]['schedule_id']
-
-        start_delay = 180
-        start = datetime.now() + timedelta(minutes=start_delay)
-
-        payload2 = {
-            "start_date": start.strftime(TIME_FMT)
-        }
-
-        # It sets a new circuit's start_date
-        response = requests.patch(api_url + schedule_id, json=payload2)
-        assert response.status_code == 200
+        circuit_id = data['circuit_id']
 
         time.sleep(10)
 
         # It verifies EVC's data
-        api_url = KYTOS_API + '/mef_eline/v2/evc/'
-        response = requests.get(api_url + disabled_circuit_id)
+        response = requests.get(api_url + circuit_id)
         data = response.json()
-        assert data['start_date'] == start.strftime(TIME_FMT)
+        assert data['active'] is False
+
+        # change the start_time
+        ts2 = ts1 + timedelta(seconds=start_delay)
+
+        payload2 = {
+            # ToDo this attribute should be start_date
+            "request_time": ts2.strftime(TIME_FMT)
+        }
+
+        # create circuit schedule
+        response = requests.patch(api_url + circuit_id, json=payload2)
+        assert response.status_code == 200
+
+        time.sleep(20)
+
+        # It verifies EVC's data
+        response = requests.get(api_url + circuit_id)
+        data = response.json()
+        assert data['active'] is False
+
+        time.sleep(20)
+
+        # It verifies EVC's data
+        response = requests.get(api_url + circuit_id)
+        data = response.json()
+        # ToDo this attribute should be start_date
+        assert data['request_time'] == ts2.strftime(TIME_FMT)
+        assert data['active'] is True
 
     def test_delete_circuit_id(self, circuit_id):
         """ Test circuit removal action. """
@@ -381,3 +397,362 @@ class TestE2EMefEline:
         # Each switch had 3 flows: 01 for LLDP + 02 for the EVC (ingress + egress)
         # at this point the flow number should be reduced to 1
         assert len(flows_s1.split('\r\n ')) == 1
+
+    """Error - It is returning 201 in a scenario in which 
+    is provided an invalid Json payload, should be 400"""
+    @pytest.mark.xfail
+    def test_create_schedule_by_date_with_invalid_json_format(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "unknown_tag": schedule_time
+            }
+        }
+
+        # create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        assert response.status_code == 400
+
+    """Error - It is returning 201 in a scenario in which 
+    is provided an empty Json payload, should be 400"""
+    @pytest.mark.xfail
+    def test_create_schedule_by_date_with_empty_json(self, circuit_id):
+        # Schedule by date to next minute
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {}
+        }
+
+        # create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        assert response.status_code == 400
+
+    def test_create_schedule_by_date_in_deleted_circuit(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Delete circuit
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        requests.delete(api_url)
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        assert response.status_code == 403
+
+    def test_create_schedule_by_date_in_unknown_circuit(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id + "A",
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        assert response.status_code == 404
+
+    """Error - It is returning 200 in a scenario in which 
+        is provided an invalid Json payload, should be 400"""
+    @pytest.mark.xfail
+    def test_patch_schedule_by_date_with_invalid_json_format(self, circuit_id):
+
+        # Schedules by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Creates circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        json = response.json()
+
+        # Gets schedule ID
+        schedule_id = json.get("id")
+
+        ts2 = datetime.now() + timedelta(seconds=120)
+        schedule_time2 = ts2.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # New schedule by date to next two minute with wrong tag
+        payload = {
+            "unknown_tag": schedule_time2
+        }
+
+        # patch circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        response = requests.patch(api_url, json=payload)
+        assert response.status_code == 400
+
+    """Error - It is returning 200 in a scenario in which 
+        is provided an empty Json payload, should be 400"""
+    @pytest.mark.xfail
+    def test_patch_schedule_by_date_with_empty_json(self, circuit_id):
+
+        # Schedules by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Creates circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        response = requests.post(api_url, json=payload)
+        json = response.json()
+
+        # Gets schedule ID
+        schedule_id = json.get("id")
+
+        # New schedule by date to next two minute with wrong tag
+        payload = {}
+
+        # patch circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        response = requests.patch(api_url, json=payload)
+        assert response.status_code == 400
+
+    def test_patch_schedule_by_date_in_deleted_schedule(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        # Delete circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        requests.delete(api_url)
+
+        ts2 = datetime.now() + timedelta(seconds=120)
+        schedule_time2 = ts2.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # New schedule by date to next two minute with wrong tag
+        payload = {
+            "date": schedule_time2
+        }
+
+        # patch circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        response = requests.patch(api_url, json=payload)
+        assert response.status_code == 404
+
+    def test_patch_schedule_by_date_in_deleted_circuit(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        # Delete the circuit
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        requests.delete(api_url)
+
+        time.sleep(10)
+
+        ts2 = datetime.now() + timedelta(seconds=120)
+        schedule_time2 = ts2.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # New schedule by date to next two minute with wrong tag
+        payload = {
+            "date": schedule_time2
+        }
+
+        # patch circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        response = requests.patch(api_url, json=payload)
+        assert response.status_code == 403
+
+    def test_patch_schedule_by_date_in_unknown_schedule(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        ts2 = datetime.now() + timedelta(seconds=120)
+        schedule_time2 = ts2.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # New schedule by date to next two minute with wrong tag
+        payload = {
+            "date": schedule_time2
+        }
+
+        # patch circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id + "A"
+        response = requests.patch(api_url, json=payload)
+        assert response.status_code == 404
+
+    def test_delete_schedule_after_delete_a_circuit(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        # Delete the circuit
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        requests.delete(api_url)
+
+        # Delete circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        response = requests.delete(api_url)
+        assert response.status_code == 403
+
+    def test_delete_unknown_schedule(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        # Delete circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id + "A"
+        response = requests.delete(api_url)
+        assert response.status_code == 404
+
+    def test_delete_a_deleted_schedule(self, circuit_id):
+
+        # Schedule by date to next minute
+        ts = datetime.now() + timedelta(seconds=60)
+        schedule_time = ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        payload = {
+            "circuit_id": circuit_id,
+            "schedule": {
+                "date": schedule_time
+            }
+        }
+
+        # Create circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule'
+        requests.post(api_url, json=payload)
+
+        # Recover schedule id created
+        api_url = KYTOS_API + '/mef_eline/v2/evc/' + circuit_id
+        response = requests.get(api_url)
+        json = response.json()
+        schedule_id = json.get("circuit_scheduler")[0].get("id")
+
+        # Delete circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id
+        requests.delete(api_url)
+
+        # Delete circuit schedule
+        api_url = KYTOS_API + '/mef_eline/v2/evc/schedule/' + schedule_id + "A"
+        response = requests.delete(api_url)
+        assert response.status_code == 404
